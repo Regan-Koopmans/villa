@@ -27,6 +27,7 @@ If you want to install vc3d from source, the easiest path is to look at the [doc
 
 [running docker as a non-root user](https://docs.docker.com/engine/install/linux-postinstall/)
 
+If you experience dependency conflicts you may be able to resolve these by building some dependencies directly. These [configuration variables](./cmake/VCFindDependencies.cmake) control which of the dependencies are built from source.
 
 ### Basic introduction to VC3D 
 The document below is a basic introduction to the ui and keybindings available in VC3D, more detailed documentation is available in the [segmentation tutorial](https://scrollprize.org/segmentation) on the scrollprize website.

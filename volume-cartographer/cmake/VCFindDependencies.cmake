@@ -3,6 +3,11 @@ include(FetchContent)
 
 option(VC_BUILD_JSON "Build in-source JSON library" OFF)
 option(VC_BUILD_Z5   "Build (vendor) z5 header-only library" ON)
+option(VC_BUILD_FMT "Build in-source fmt library" OFF)
+option(VC_BUILD_EIGEN "Build in-source Eigen library" OFF)
+option(VC_BUILD_CERES "Build in-source ceres-solver library" OFF)
+option(VC_BUILD_XTENSOR "Build in-source xtensor library" OFF)
+option(VC_BUILD_SPDLOG "Build in-source spdlog library" OFF)
 
 #find_package(CURL REQUIRED)
 #find_package(OpenSSL REQUIRED)
@@ -63,15 +68,38 @@ if (VC_WITH_CUDA_SPARSE)
     add_definitions(-DVC_USE_CUDA_SPARSE=1)
 endif()
 
-# ---- Ceres -------------------------------------------------------------------
-find_package(Ceres REQUIRED)
-
 # ---- Eigen -------------------------------------------------------------------
-find_package(Eigen3 3.3 REQUIRED)
+if (VC_BUILD_EIGEN)
+    FetchContent_Declare(
+        Eigen3
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG 3.4.1
+    )
+    FetchContent_GetProperties(Eigen3)
+    if(NOT Eigen3_POPULATED)
+      FetchContent_Populate(Eigen3)
+      add_subdirectory(${eigen3_SOURCE_DIR} ${eigen3_BINARY_DIR})
+    endif()
+else()
+    find_package(Eigen3 REQUIRED NO_MODULE)
+endif()
+
 if (CMAKE_GENERATOR MATCHES "Ninja|.*Makefiles.*" AND "${CMAKE_BUILD_TYPE}" MATCHES "^$|Debug")
     message(AUTHOR_WARNING
         "Configuring a Debug build. Eigen performance will be degraded. "
         "Consider RelWithDebInfo for symbols, or Release for max performance.")
+endif()
+
+# ---- Ceres -------------------------------------------------------------------
+if (VC_BUILD_CERES)
+    FetchContent_Declare(
+        ceres
+        GIT_REPOSITORY https://github.com/ceres-solver/ceres-solver.git
+        GIT_TAG 2.2.0
+    )
+    FetchContent_MakeAvailable(ceres)
+else()
+    find_package(Ceres REQUIRED)
 endif()
 
 # ---- OpenCV ------------------------------------------------------------------
@@ -95,11 +123,73 @@ else()
 endif()
 
 # ---- xtensor/xsimd toggle used by your code ---------------------------------
-set(XTENSOR_USE_XSIMD 1)
-find_package(xtensor REQUIRED)
+
+if (VC_BUILD_XTENSOR)
+    set(XTENSOR_USE_XSIMD 1)
+    FetchContent_Declare(
+        xtl
+        GIT_REPOSITORY https://github.com/xtensor-stack/xtl.git
+        GIT_TAG 0.8.1
+    )
+    FetchContent_MakeAvailable(xtl)
+
+    FetchContent_Declare(
+        xsimd
+        GIT_REPOSITORY https://github.com/xtensor-stack/xsimd.git
+        GIT_TAG 13.2.0
+    )
+    FetchContent_MakeAvailable(xsimd)
+
+    FetchContent_Declare(
+        xtensor
+        GIT_REPOSITORY https://github.com/xtensor-stack/xtensor.git
+        GIT_TAG 0.27.1
+    )
+    FetchContent_MakeAvailable(xtensor)
+else()
+    set(XTENSOR_USE_XSIMD 1)
+    find_package(xtensor REQUIRED)
+    get_target_property(XTENSOR_INCLUDES xtensor INTERFACE_INCLUDE_DIRECTORIES)
+    message(STATUS "xtensor include dirs: ${XTENSOR_INCLUDES}")
+endif()
+
+# ---- fmt ---------------------------------------------------------------------
+
+if (VC_BUILD_FMT)
+    FetchContent_Declare(
+        fmt
+        GIT_REPOSITORY https://github.com/fmtlib/fmt.git
+        GIT_TAG 12.1.0
+    )
+    FetchContent_MakeAvailable(fmt)
+else()
+    find_package(fmt REQUIRED)
+endif()
 
 # ---- spdlog ------------------------------------------------------------------
-find_package(spdlog 1.4.2 CONFIG REQUIRED)
+
+if (VC_BUILD_SPDLOG)
+    set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG v1.4.2
+    )
+    FetchContent_MakeAvailable(spdlog)
+    if(VC_INSTALL_LIBS)
+        install(
+                TARGETS spdlog
+                COMPONENT "Libraries"
+                EXPORT "${targets_export_name}"
+                ARCHIVE DESTINATION "lib"
+                LIBRARY DESTINATION "lib"
+                INCLUDES DESTINATION "${include_install_dir}"
+                RUNTIME DESTINATION "bin"
+        )
+    endif()
+else()
+    find_package(spdlog 1.4.2 CONFIG REQUIRED)
+endif()
 
 # ---- nlohmann/json -----------------------------------------------------------
 if (VC_BUILD_JSON)
