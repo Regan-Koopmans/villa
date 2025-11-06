@@ -487,21 +487,40 @@ void CVolumeViewer::onCursorMove(QPointF scene_loc)
 void CVolumeViewer::recalcScales()
 {
     float old_ds = _ds_scale;         // remember previous level
-    // if (dynamic_cast<PlaneSurface*>(_surf))
-    _min_scale = pow(2.0,1.-volume->numScales());
-    // else
-        // _min_scale = std::max(pow(2.0,1.-volume->numScales()), 0.5);
-    
+    // Update min_scale based on actual scale levels
+    if (volume->numScales() > 0) {
+        int maxScaleLevel = volume->scaleLevel(volume->numScales() - 1);
+        _min_scale = std::pow(2.0f, -maxScaleLevel);
+    }
+
     /* -------- chooses _ds_scale/_ds_sd_idx -------- */
     if      (_scale >= _max_scale) { _ds_sd_idx = 0;                         }
     else if (_scale <  _min_scale) { _ds_sd_idx = volume->numScales()-1;     }
-    else  { _ds_sd_idx = int(std::round(-std::log2(_scale))); }
+    else  {
+        // Find the best matching scale level based on current view scale
+        // Target scale level based on view scale
+        int targetLevel = int(std::round(-std::log2(_scale)));
+
+        // Find the index with the closest actual scale level to our target
+        int bestIdx = 0;
+        int minDiff = std::abs(volume->scaleLevel(0) - targetLevel);
+        for (int i = 1; i < volume->numScales(); i++) {
+            int diff = std::abs(volume->scaleLevel(i) - targetLevel);
+            if (diff < minDiff) {
+                minDiff = diff;
+                bestIdx = i;
+            }
+        }
+        _ds_sd_idx = bestIdx;
+    }
     if (_downscale_override > 0) {
         _ds_sd_idx += _downscale_override;
         // Clamp to available scales
         _ds_sd_idx = std::min(_ds_sd_idx, (int)volume->numScales() - 1);
     }
-    _ds_scale = std::pow(2.0f, -_ds_sd_idx);
+    // Use the actual scale level from the zarr group name, not the array index
+    int actualScaleLevel = volume->scaleLevel(_ds_sd_idx);
+    _ds_scale = std::pow(2.0f, -actualScaleLevel);
     /* ---------------------------------------------------------------- */
 
     /* ---- refresh physical voxel size when pyramid level flips -- */
@@ -635,12 +654,20 @@ void CVolumeViewer::OnVolumeChanged(std::shared_ptr<Volume> volume_)
     fGraphicsView->setSceneRect(-max_size/2,-max_size/2,max_size,max_size);
     
     if (volume->numScales() >= 2) {
-        //FIXME currently hardcoded
-        _max_scale = 0.5;
-        _min_scale = pow(2.0,1.-volume->numScales());
+        // Calculate max and min scale based on actual scale levels
+        int minScaleLevel = volume->scaleLevel(0);
+        int maxScaleLevel = volume->scaleLevel(volume->numScales() - 1);
+        _max_scale = std::pow(2.0f, -minScaleLevel);
+        _min_scale = std::pow(2.0f, -maxScaleLevel);
+    }
+    else if (volume->numScales() == 1) {
+        // Single scale - use the actual scale level
+        int scaleLevel = volume->scaleLevel(0);
+        _max_scale = std::pow(2.0f, -scaleLevel);
+        _min_scale = _max_scale;
     }
     else {
-        //FIXME currently hardcoded
+        // No scales available
         _max_scale = 1.0;
         _min_scale = 1.0;
     }

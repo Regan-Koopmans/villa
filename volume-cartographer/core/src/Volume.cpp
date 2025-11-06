@@ -63,6 +63,15 @@ void Volume::zarrOpen()
         zarrDs_.push_back(z5::filesystem::openDataset(ds_handle));
         if (zarrDs_.back()->getDtype() != z5::types::Datatype::uint8 && zarrDs_.back()->getDtype() != z5::types::Datatype::uint16)
             throw std::runtime_error("only uint8 & uint16 is currently supported for zarr datasets incompatible type found in "+path_.string()+" / " +name);
+
+        // Parse the actual scale level from the group name
+        try {
+            int scaleLevel = std::stoi(name);
+            zarrScaleLevels_.push_back(scaleLevel);
+        } catch (const std::exception&) {
+            // If parsing fails, assume index matches level (old behavior)
+            zarrScaleLevels_.push_back(zarrScaleLevels_.size());
+        }
     }
 }
 
@@ -93,4 +102,10 @@ z5::Dataset *Volume::zarrDataset(int level) const {
 
 size_t Volume::numScales() const {
     return zarrDs_.size();
+}
+
+int Volume::scaleLevel(int index) const {
+    if (index >= zarrScaleLevels_.size())
+        return index; // Fallback to index if out of bounds
+    return zarrScaleLevels_[index];
 }

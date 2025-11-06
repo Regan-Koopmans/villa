@@ -32,7 +32,8 @@ public:
 
     [[nodiscard]] z5::Dataset *zarrDataset(int level = 0) const;
     [[nodiscard]] size_t numScales() const;
-    
+    [[nodiscard]] int scaleLevel(int index) const;
+
 protected:
     int _width{0};
     int _height{0};
@@ -40,6 +41,7 @@ protected:
 
     std::unique_ptr<z5::filesystem::handle::File> zarrFile_;
     std::vector<std::unique_ptr<z5::Dataset>> zarrDs_;
+    std::vector<int> zarrScaleLevels_;
     nlohmann::json zarrGroup_;
     void zarrOpen();
 };
