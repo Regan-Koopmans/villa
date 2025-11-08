@@ -1483,7 +1483,9 @@ QuadSurface *grow_surf_from_surfs(SurfaceMeta *seed, const std::vector<SurfaceMe
     std::string log_filename = "/tmp/vc_grow_seg_from_segments_" + get_surface_time_str() + "_used_approved_segments.txt";
     std::ofstream approved_log(log_filename);
 
+    std::map<std::string, SurfaceMeta*> all_surfs;
     for(auto &sm : surfs_v) {
+        all_surfs[sm->name()] = sm;
         if (sm->meta->contains("tags") && sm->meta->at("tags").contains("approved"))
             approved_sm.insert(sm);
         if (!sm->meta->contains("tags") || !sm->meta->at("tags").contains("defective")) {
@@ -1496,8 +1498,8 @@ QuadSurface *grow_surf_from_surfs(SurfaceMeta *seed, const std::vector<SurfaceMe
 
     for(auto &sm : surfs_v)
         for(const auto& name : sm->overlapping_str)
-            if (surfs.contains(name))
-                sm->overlapping.insert(surfs[name]);
+            if (all_surfs.contains(name))
+                sm->overlapping.insert(all_surfs[name]);
 
     std::cout << "total surface count (after defective filter): " << surfs.size() << std::endl;
     std::cout << "seed " << seed << " name " << seed->name() << " seed overlapping: "
