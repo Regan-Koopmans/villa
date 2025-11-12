@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-CLI tool for mesh hole inpainting.
+CLI tool for mesh hole inpainting using PyMeshLab's hole filling.
 
 Usage:
-    vesuvius.inpaint_mesh input.obj output.obj --method context_aware
-    vesuvius.inpaint_mesh input.obj output.obj --method fair --smooth-iterations 50
+    vesuvius.inpaint_mesh input.obj output.obj
+    vesuvius.inpaint_mesh input.obj --validate-only
 """
 
 import argparse
@@ -12,32 +12,28 @@ import logging
 import sys
 from pathlib import Path
 
-from vesuvius.image_proc.mesh import inpaint_mesh, validate_mesh, detect_holes, load_mesh
+from vesuvius.image_proc.mesh import inpaint_mesh, validate_mesh
+import pymeshlab
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Inpaint holes in triangle meshes from surface tracing",
+        description="Inpaint holes in triangle meshes using PyMeshLab's hole filling. "
+                    "This method uses MeshLab's robust algorithms to fill holes in mesh geometry.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Inpaint using context-aware method (best quality)
+  # Inpaint mesh with holes
   vesuvius.inpaint_mesh surface_holes.obj surface_filled.obj
-
-  # Use fair filling with more smoothing
-  vesuvius.inpaint_mesh input.obj output.obj --method fair --smooth-iterations 100
-
-  # Quick filling for testing
-  vesuvius.inpaint_mesh input.obj output.obj --method advancing_front
 
   # Only validate without inpainting
   vesuvius.inpaint_mesh input.obj --validate-only
 
-Methods:
-  context_aware   - Uses local surface normals and curvature (default, best)
-  fair            - Minimal surface with Laplacian smoothing
-  advancing_front - Quick iterative filling (requires libigl)
-  poisson         - Poisson surface reconstruction (requires pymeshlab)
+  # Verbose output with custom smoothing
+  vesuvius.inpaint_mesh input.obj output.obj --verbose --smoothing-steps 5
+
+  # Fill only small holes and simplify result
+  vesuvius.inpaint_mesh input.obj output.obj --max-hole-size 1000 --simplify
         """
     )
 
@@ -52,21 +48,6 @@ Methods:
         type=str,
         nargs="?",
         help="Output .obj mesh file (optional if --validate-only)"
-    )
-
-    parser.add_argument(
-        "--method",
-        type=str,
-        choices=["context_aware", "fair", "advancing_front", "poisson"],
-        default="context_aware",
-        help="Inpainting method (default: context_aware)"
-    )
-
-    parser.add_argument(
-        "--smooth-iterations",
-        type=int,
-        default=10,
-        help="Number of smoothing iterations for 'fair' method (default: 10)"
     )
 
     parser.add_argument(
@@ -86,6 +67,26 @@ Methods:
         "-v",
         action="store_true",
         help="Enable verbose logging"
+    )
+
+    parser.add_argument(
+        "--max-hole-size",
+        type=int,
+        default=1000000,
+        help="Maximum hole size (edge count) to fill (default: 1000000 for all holes)"
+    )
+
+    parser.add_argument(
+        "--smoothing-steps",
+        type=int,
+        default=3,
+        help="Number of Laplacian smoothing steps (default: 3, use 0 to skip)"
+    )
+
+    parser.add_argument(
+        "--simplify",
+        action="store_true",
+        help="Simplify the mesh after hole filling"
     )
 
     args = parser.parse_args()
@@ -111,17 +112,17 @@ Methods:
         print(f"Validating mesh: {input_path}")
 
         try:
-            vertices, faces = load_mesh(input_path)
+            # Use PyMeshLab to load the mesh
+            ms = pymeshlab.MeshSet()
+            ms.load_new_mesh(str(input_path))
+            current_mesh = ms.current_mesh()
+
+            vertices = current_mesh.vertex_matrix()
+            faces = current_mesh.face_matrix()
+
             print(f"  Loaded: {len(vertices)} vertices, {len(faces)} faces")
 
-            # Detect holes
-            holes = detect_holes(vertices, faces)
-            print(f"  Holes detected: {len(holes)}")
-            for i, hole in enumerate(holes):
-                print(f"    Hole {i+1}: {len(hole.boundary_indices)} boundary vertices, "
-                      f"area ~{hole.area:.2f}, perimeter ~{hole.perimeter:.2f}")
-
-            # Validate
+            # Validate using Open3D
             validation = validate_mesh(vertices, faces)
             print(f"\nValidation Results:")
             print(f"  Watertight: {validation.is_watertight}")
@@ -160,16 +161,20 @@ Methods:
 
     # Run inpainting
     print(f"Inpainting mesh: {input_path}")
-    print(f"  Method: {args.method}")
+    print(f"  Method: PyMeshLab hole filling")
+    print(f"  Max hole size: {args.max_hole_size}")
+    print(f"  Smoothing steps: {args.smoothing_steps}")
+    print(f"  Simplify: {args.simplify}")
     print(f"  Output: {output_path}")
 
     try:
         vertices, faces, validation = inpaint_mesh(
             mesh_path=input_path,
             output_path=output_path,
-            method=args.method,
-            smooth_iterations=args.smooth_iterations,
-            validate=not args.no_validate
+            validate=not args.no_validate,
+            max_hole_size=args.max_hole_size,
+            smoothing_steps=args.smoothing_steps,
+            simplify=args.simplify
         )
 
         print(f"\nSuccess!")
