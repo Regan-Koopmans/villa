@@ -13,13 +13,12 @@ import sys
 from pathlib import Path
 
 from vesuvius.image_proc.mesh import inpaint_mesh, validate_mesh
-import pymeshlab
+import igl
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Inpaint holes in triangle meshes using PyMeshLab's hole filling. "
-                    "This method uses MeshLab's robust algorithms to fill holes in mesh geometry.",
+        description="Inpaint holes in triangle meshes using libigl",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -112,13 +111,8 @@ Examples:
         print(f"Validating mesh: {input_path}")
 
         try:
-            # Use PyMeshLab to load the mesh
-            ms = pymeshlab.MeshSet()
-            ms.load_new_mesh(str(input_path))
-            current_mesh = ms.current_mesh()
-
-            vertices = current_mesh.vertex_matrix()
-            faces = current_mesh.face_matrix()
+            # Use libigl to load the mesh
+            vertices, faces = igl.read_triangle_mesh(str(input_path))
 
             print(f"  Loaded: {len(vertices)} vertices, {len(faces)} faces")
 

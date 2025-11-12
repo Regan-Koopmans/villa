@@ -1,10 +1,11 @@
 import numpy as np
 import open3d as o3d
-import pymeshlab
+import igl
 from pathlib import Path
 from typing import Tuple, List, Optional, Union
 from dataclasses import dataclass
 import logging
+from scipy.sparse.linalg import spsolve
 
 
 @dataclass
@@ -108,10 +109,9 @@ def inpaint_mesh(mesh_path: Union[str, Path],
                 smoothing_steps: int = 3,
                 simplify: bool = False) -> Tuple[np.ndarray, np.ndarray, Optional[MeshValidationResult]]:
     """
-    Inpaint holes in a triangle mesh using PyMeshLab's hole filling algorithms.
+    Inpaint holes in a triangle mesh using libigl.
 
-    This method uses MeshLab's robust hole filling implementation, which handles
-    complex geometries better than custom implementations.
+    Uses libigl for hole detection, filling, and mesh refinement.
 
     Args:
         mesh_path: Path to input .obj mesh file with holes
@@ -132,110 +132,140 @@ def inpaint_mesh(mesh_path: Union[str, Path],
         ...     "surface_with_holes.obj",
         ...     "surface_inpainted.obj"
         ... )
-        >>> print(f"Filled {validation.num_holes} holes")
+        >>> print(f"Inpainted mesh: {len(vertices)} vertices, {len(faces)} faces")
     """
     mesh_path = Path(mesh_path)
 
     logging.info(f"Loading mesh from {mesh_path}...")
 
-    # Use PyMeshLab for hole filling (it handles hole detection internally)
-    ms = pymeshlab.MeshSet()
-    ms.load_new_mesh(str(mesh_path))
-
-    # Get mesh info for logging
-    current_mesh = ms.current_mesh()
-    num_vertices = current_mesh.vertex_number()
-    num_faces = current_mesh.face_number()
+    # Load mesh with igl
+    vertices, faces = igl.read_triangle_mesh(str(mesh_path))
+    num_vertices = len(vertices)
+    num_faces = len(faces)
     logging.info(f"Loaded mesh with {num_vertices} vertices and {num_faces} faces")
 
-    logging.info(f"Filling holes using PyMeshLab's refinement-based algorithm...")
+    # Detect boundary loops (holes) using igl
+    logging.info("Detecting boundary loops...")
+    boundary_loops = igl.boundary_loop(faces)
 
-    # Compute vertex normals if not present (needed for better hole filling)
-    try:
-        ms.compute_normal_per_vertex()
-        logging.info("Computed vertex normals")
-    except Exception as e:
-        logging.warning(f"Could not compute normals: {e}")
+    if len(boundary_loops) == 0:
+        logging.info("No holes detected - mesh is already watertight")
+        # Still save if output path provided
+        if output_path:
+            output_path = Path(output_path)
+            logging.info(f"Saving mesh to {output_path}...")
+            igl.write_triangle_mesh(str(output_path), vertices, faces)
 
-    # Close holes using MeshLab's hole filling
+        validation_result = None
+        if validate:
+            logging.info("Validating mesh...")
+            validation_result = validate_mesh(vertices, faces, check_intersections=False)
+
+        return vertices, faces, validation_result
+
+    logging.info(f"Found {len(boundary_loops)} boundary loops (holes)")
+
+    # Fill holes using igl
+    logging.info("Filling holes using igl...")
+
+    # Use libigl to fill holes
     try:
-        # Use the standard hole closing algorithm
-        ms.meshing_close_holes(maxholesize=max_hole_size)
-        logging.info("Successfully closed holes")
+        # Fill all holes that are within max_hole_size
+        filled_vertices = vertices.copy()
+        new_faces_list = [faces]
+
+        # For each boundary loop, check size and fill if needed
+        for i, loop in enumerate(boundary_loops):
+            if len(loop) > max_hole_size:
+                logging.warning(f"Skipping hole {i+1} (size {len(loop)} > max {max_hole_size})")
+                continue
+
+            logging.info(f"Filling hole {i+1} with {len(loop)} boundary edges")
+
+            # Vectorized fan triangulation from first vertex
+            if len(loop) >= 3:
+                # Create fan triangles: (v0, v1, v2), (v0, v2, v3), ...
+                n_triangles = len(loop) - 2
+                fan_faces = np.zeros((n_triangles, 3), dtype=np.int32)
+                fan_faces[:, 0] = loop[0]  # All triangles share first vertex
+                fan_faces[:, 1] = loop[1:-1]  # Sequential vertices
+                fan_faces[:, 2] = loop[2:]  # Next vertices
+                new_faces_list.append(fan_faces)
+
+        # Combine all faces
+        filled_faces = np.vstack(new_faces_list)
+        logging.info(f"Successfully filled holes: {len(filled_faces) - len(faces)} new faces added")
+
     except Exception as e:
         logging.error(f"Hole filling failed: {e}")
         logging.warning("Returning original mesh")
-        # Get original mesh data for error return
-        current_mesh = ms.current_mesh()
-        vertices = current_mesh.vertex_matrix()
-        faces = current_mesh.face_matrix()
         if validate:
             validation_result = validate_mesh(vertices, faces)
             return vertices, faces, validation_result
         return vertices, faces, None
 
     # Refine the filled regions for better quality
-    # This approach uses subdivision and smoothing to improve the filled patches
-    try:
-        logging.info("Refining filled regions with subdivision and smoothing...")
+    new_vertices = filled_vertices
+    new_faces = filled_faces
 
-        # Step 1: Apply one iteration of Loop subdivision to the newly filled faces
-        # This creates a smoother, more refined mesh in the filled regions
+    if smoothing_steps > 0 or simplify:
         try:
-            ms.meshing_surface_subdivision_loop(iterations=1)
-            logging.info("Applied Loop subdivision for refinement")
-        except Exception as e:
-            logging.warning(f"Loop subdivision failed: {e}")
+            logging.info("Refining filled regions with subdivision and smoothing...")
 
-        # Step 2: Apply HC Laplacian smoothing (better than standard Laplacian)
-        # HC smoothing preserves features better while smoothing the surface
-        if smoothing_steps > 0:
+            # Step 1: Apply Loop subdivision using igl
             try:
-                # HC Laplacian: alternates between Laplacian smoothing and inverse smoothing
-                ms.apply_coord_hc_laplacian_smoothing(stepsmoothnum=smoothing_steps)
-                logging.info(f"Applied HC Laplacian smoothing ({smoothing_steps} steps)")
+                new_vertices, new_faces = igl.upsample(new_vertices, new_faces, number_of_subdivs=1)
+                logging.info("Applied Loop subdivision for refinement")
             except Exception as e:
-                logging.warning(f"HC Laplacian smoothing failed, trying Taubin: {e}")
+                logging.warning(f"Loop subdivision failed: {e}")
+
+            # Step 2: Apply Laplacian smoothing using igl
+            if smoothing_steps > 0:
                 try:
-                    # Fall back to Taubin smoothing (volume-preserving)
-                    ms.apply_coord_taubin_smoothing(lambda_=0.5, mu=-0.53, stepsmoothnum=smoothing_steps)
-                    logging.info(f"Applied Taubin smoothing ({smoothing_steps} steps)")
-                except Exception as e2:
-                    logging.warning(f"Taubin smoothing failed, trying basic Laplacian: {e2}")
-                    try:
-                        # Last resort: basic Laplacian
-                        ms.apply_coord_laplacian_smoothing(stepsmoothnum=smoothing_steps)
-                        logging.info(f"Applied Laplacian smoothing ({smoothing_steps} steps)")
-                    except Exception as e3:
-                        logging.warning(f"All smoothing methods failed: {e3}")
+                    # igl Laplacian smoothing
+                    # Build the cotangent Laplacian matrix (computed once)
+                    L = igl.cotmatrix(new_vertices, new_faces)
 
-        # Step 3: Recompute normals after refinement
-        try:
-            ms.compute_normal_per_vertex()
-            logging.info("Recomputed normals after refinement")
+                    # Mass matrix for normalization (computed once)
+                    M = igl.massmatrix(new_vertices, new_faces, igl.MASSMATRIX_TYPE_VORONOI)
+
+                    # Precompute system matrix (computed once)
+                    lambda_smooth = 0.5  # Smoothing parameter
+                    A = M - lambda_smooth * L
+
+                    # Apply iterative smoothing
+                    smoothed_vertices = new_vertices.copy()
+                    for _ in range(smoothing_steps):
+                        # Solve Laplacian smoothing: (M - lambda*L)*V' = M*V
+                        # Solve for each coordinate dimension independently
+                        for dim in range(3):
+                            b = M @ smoothed_vertices[:, dim]
+                            # Convert to dense if sparse
+                            b_dense = b.toarray().ravel() if hasattr(b, 'toarray') else b
+                            smoothed_vertices[:, dim] = spsolve(A, b_dense)
+
+                    new_vertices = smoothed_vertices
+                    logging.info(f"Applied Laplacian smoothing ({smoothing_steps} steps)")
+                except Exception as e:
+                    logging.warning(f"Laplacian smoothing failed: {e}")
+
+            logging.info("Refinement complete")
+
         except Exception as e:
-            logging.warning(f"Could not recompute normals: {e}")
+            logging.warning(f"Refinement process failed (continuing with basic fill): {e}")
 
-        logging.info("Refinement complete")
-
-    except Exception as e:
-        logging.warning(f"Refinement process failed (continuing with basic fill): {e}")
-
-    # Optional: Simplify the mesh
+    # Optional: Simplify the mesh using igl
     if simplify:
         logging.info("Simplifying mesh...")
         try:
-            original_faces = ms.current_mesh().face_number()
+            original_faces = len(new_faces)
             target_faces = int(original_faces * 0.95)  # Reduce by 5%
-            ms.meshing_decimation_quadric_edge_collapse(targetfacenum=target_faces)
-            logging.info(f"Simplified from {original_faces} to {ms.current_mesh().face_number()} faces")
+
+            # Use igl's edge collapse decimation
+            new_vertices, new_faces, _, _ = igl.decimate(new_vertices, new_faces, target_faces)
+            logging.info(f"Simplified from {original_faces} to {len(new_faces)} faces")
         except Exception as e:
             logging.warning(f"Simplification failed (continuing anyway): {e}")
-
-    # Extract the result
-    current_mesh = ms.current_mesh()
-    new_vertices = current_mesh.vertex_matrix()
-    new_faces = current_mesh.face_matrix()
 
     logging.info(f"Inpainting complete: {len(new_vertices)} vertices, {len(new_faces)} faces")
 
@@ -243,7 +273,7 @@ def inpaint_mesh(mesh_path: Union[str, Path],
     if output_path:
         output_path = Path(output_path)
         logging.info(f"Saving result to {output_path}...")
-        ms.save_current_mesh(str(output_path), save_vertex_normal=True)
+        igl.write_triangle_mesh(str(output_path), new_vertices, new_faces)
         logging.info(f"Saved inpainted mesh to {output_path}")
 
     # Validate result

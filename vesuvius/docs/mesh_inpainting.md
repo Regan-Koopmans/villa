@@ -138,8 +138,6 @@ Uses implicit surface reconstruction.
 vesuvius.inpaint_mesh input.obj output.obj --method poisson
 ```
 
-**Requires:** `pymeshlab` (install with `pip install pymeshlab`)
-
 **Pros:**
 - Handles complex geometry
 - Uses global information
