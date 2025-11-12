@@ -92,6 +92,7 @@ Homepage = "https://github.com/ScrollPrize/villa"
 "vesuvius.render_obj" = "vesuvius.rendering.mesh_to_surface:main"
 "vesuvius.flatten_obj" = "vesuvius.rendering.slim_uv:main"
 "vesuvius.train" = "vesuvius.models.training.train:main"
+"vesuvius.inpaint_mesh" = "vesuvius.image_proc.mesh.inpaint_cli:main"
 
 [tool.setuptools]
 include-package-data = true
